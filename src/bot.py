@@ -8,7 +8,6 @@ import random # для случайного выбора
 import sqlite3 # для работы с базами данных
 import numpy as np
 from dotenv import load_dotenv # для загрузки переменных окружения
-from telebot import TeleBot
 from telegram import Update, KeyboardButton
 from telegram.ext import Updater, CommandHandler, CallbackContext
 from telegram.ext import MessageHandler, Filters
@@ -19,7 +18,6 @@ from telegram import ReplyKeyboardMarkup
 load_dotenv() # загрузка переменных окружения
 token = os.getenv('TOKEN') # берём токен бота из переменных окружения
 data_path = os.getenv('DATA_PATH')
-bot = TeleBot(token=token) 
 
 data = {}
 
