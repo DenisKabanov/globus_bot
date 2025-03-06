@@ -7,6 +7,7 @@ import os # для переменных окружения (токена бот�
 import random # для случайного выбора
 import numpy as np
 import pandas as pd
+from pyxdameraulevenshtein import damerau_levenshtein_distance # для подсчёта минимального числа изменений в первой строке, чтобы она стала идентичной второй
 from dotenv import load_dotenv # для загрузки переменных окружения
 from telegram import Update, KeyboardButton
 from telegram.ext import Updater, CommandHandler, CallbackContext
@@ -64,13 +65,14 @@ button_help4 = KeyboardButton("подскажи язык")
 button_help5 = KeyboardButton("подскажи исторический факт")
 button_help6 = KeyboardButton("подскажи города")
 button_help7 = KeyboardButton("подскажи часть названия")
+button_help8 = KeyboardButton("подскажи буквы")
 
 kb_help = ReplyKeyboardMarkup(
     keyboard=[
         [button_help1, button_help2],
         [button_help3, button_help4],
         [button_help5, button_help6],
-        [button_help7]
+        [button_help7, button_help8]
     ],
     resize_keyboard=True  # Optional: Resizes the keyboard to fit the screen
 )
@@ -112,7 +114,7 @@ def send_flag(update: Update, context: CallbackContext) -> None:
     global db
     chat_id = update.message.chat.id
 
-    country_number = random.choices(np.arange(len(data)), k=1)[0]
+    country_number = random.choices(range(len(data)), k=1)[0]
     country_name = list(data.keys())[country_number]
     
     flag_path = data[country_name]['flag']
@@ -165,28 +167,43 @@ def answer_flag(update: Update, context: CallbackContext) -> None:
     save_db(db)
 
 def hint(update: Update, context: CallbackContext) -> None:
-    #global db
     chat_id = update.message.chat.id
-    type_of_help = update.message.text[9:]
-    help_nature = data[country_name]["description"]['Природа']
-    help_attractions = data[country_name]["description"]['Достопримечательности']
-    for hint in ["Природа", "Достопримечательности", "Культура", "Язык", "Исторический факт", "Города"]:
-            data[country_name]["description"][hint] = f.readline()[len(hint) + 2:]
-            f.readline()
-    if type_of_help.lower() == 'природу':
+    hint_type = update.message.text[9:]
+
+    country_name = db.loc[db["chat_id"] == chat_id, "current_country"].iloc[0]
+    name_len = len(country_name)
+
+    if damerau_levenshtein_distance(hint_type, "природу") <= 2:
         hint = data[country_name]['description']['Природа']
-    if type_of_help.lower() == 'достопримечательность':
+    elif damerau_levenshtein_distance(hint_type, "достопримечательность") <= 2:
         hint = data[country_name]['description']['Достопримечательности']
-    if type_of_help.lower() == 'культуру':
+    elif damerau_levenshtein_distance(hint_type, "культуру") <= 2:
         hint = data[country_name]['description']['Культура']
-    if type_of_help.lower() == 'язык':
+    elif damerau_levenshtein_distance(hint_type, "язык") <= 2:
         hint = data[country_name]['description']['Язык']
-    if type_of_help.lower() == 'исторический факт':
+    elif damerau_levenshtein_distance(hint_type, "исторический факт") <= 2:
         hint = data[country_name]['description']['Исторический факт']
-    if type_of_help.lower() == 'города':
+    elif damerau_levenshtein_distance(hint_type, "города") <= 2:
         hint = data[country_name]['description']['Города']
-    if type_of_help.lower() == 'названия':
-        hint = data[country_name]['description']['Города']
+    elif damerau_levenshtein_distance(hint_type, "часть названия") <= 2:
+        start_idx, end_idx = sorted(random.sample(range(name_len), k=2)) # с какой по какую буквы подсказываем
+        hint = "" # для подсказки части слова
+        for i in range(name_len): # идём по числу букв в загаданном названии
+            if start_idx <= i <= end_idx: # если буква в нужном интервале
+                hint += country_name[i] # добавляем её саму
+            else: # иначе
+                hint += "*" # зашифровываем букву
+    elif damerau_levenshtein_distance(hint_type, "буквы") <= 2:
+        idx_to_show = sorted(random.sample(range(name_len), k=int(name_len/3))) # с какой по какую буквы подсказываем
+        hint = "" # для подсказки части слова
+        for i in range(name_len): # идём по числу букв в загаданном названии
+            if (i in idx_to_show) or (country_name[i] in [" ", "—", "-", "'"]): # если буква в нужном интервале или является специальным символом
+                hint += country_name[i] # добавляем её саму
+            else: # иначе
+                hint += "*" # зашифровываем букву
+
+    update.message.reply_text(hint, reply_markup=kb_help)
+
 
 def tell_about(update: Update, context: CallbackContext) -> None:
     print(update)
@@ -213,8 +230,9 @@ def main():
     dispatcher.add_handler(CommandHandler("start", start))
     dispatcher.add_handler(CommandHandler("help", help))
     # dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, repeat))
-    dispatcher.add_handler(MessageHandler(Filters.regex(r"загадай"), send_flag))
-    dispatcher.add_handler(MessageHandler(Filters.regex(r"расскажи о"), tell_about))
+    dispatcher.add_handler(MessageHandler(Filters.regex(r"[З|з]агадай"), send_flag))
+    dispatcher.add_handler(MessageHandler(Filters.regex(r"[П|п]одскажи .*"), hint))
+    dispatcher.add_handler(MessageHandler(Filters.regex(r"[Р|р]асскажи о"), tell_about))
     dispatcher.add_handler(MessageHandler(Filters.text, answer_flag)) 
     
     # dispatcher.add_error_handler(error)
