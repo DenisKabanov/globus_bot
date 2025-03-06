@@ -5,60 +5,76 @@
 import json
 import os # для переменных окружения (токена бота)
 import random # для случайного выбора
-import sqlite3 # для работы с базами данных
 import numpy as np
+import pandas as pd
 from dotenv import load_dotenv # для загрузки переменных окружения
 from telegram import Update, KeyboardButton
 from telegram.ext import Updater, CommandHandler, CallbackContext
 from telegram.ext import MessageHandler, Filters
 from telegram import ReplyKeyboardMarkup
-#import logging # для логирования
+# import logging # для логирования
 
 
 load_dotenv() # загрузка переменных окружения
-token = os.getenv('TOKEN') # берём токен бота из переменных окружения
-data_path = os.getenv('DATA_PATH')
+TOKEN = os.getenv("TOKEN") # берём токен бота из переменных окружения
+DATA_PATH = os.getenv("DATA_PATH")
+DB_PATH = os.getenv("DB_PATH")
+
+
+db = pd.DataFrame()
+if os.path.exists(f"{DB_PATH}/users.json"):
+    db = pd.read_json(f"{DB_PATH}/users.json", lines=True)
+else:
+    db = pd.DataFrame(columns=["user_name", "chat_id", "current_country", "current_answer", "countries_history"])
+    db.to_json(f"{DB_PATH}/users.json", orient='records', lines=True, force_ascii=False)
+
 
 data = {}
-
-for country_name in os.listdir(data_path):
-    
+for country_name in os.listdir(DATA_PATH):
     data[country_name] = {}
-    data[country_name]["flag"] = f"{data_path}/{country_name}/flag.png"
-    data[country_name]["map"] = f"{data_path}/{country_name}/map.png"
-
+    data[country_name]["flag"] = f"{DATA_PATH}/{country_name}/flag.png"
+    data[country_name]["map"] = f"{DATA_PATH}/{country_name}/map.png"
     data[country_name]["description"] = {}
     
-    with open(f"{data_path}/{country_name}/description.txt", "r", encoding="utf-8") as f:
-        
+    with open(f"{DATA_PATH}/{country_name}/description.txt", "r", encoding="utf-8") as f:
         for hint in ["Природа", "Достопримечательности", "Культура", "Язык", "Исторический факт", "Города"]:
-            
             data[country_name]["description"][hint] = f.readline()[len(hint) + 2:]
             f.readline()
         
-        data[country_name]["description"]["Общее описание"] = f.readline(-1)    
+        data[country_name]["description"]["Общее описание"] = f.readline(-1)
+
+
+button1 = KeyboardButton("/start")
+button2 = KeyboardButton("/help")
+button3 = KeyboardButton("загадай")
+button4 = KeyboardButton("расскажи о стране")
+
+kb_basic = ReplyKeyboardMarkup(
+    keyboard=[
+        [button1, button2],
+        [button3, button4]
+    ],
+    resize_keyboard=True  # Optional: Resizes the keyboard to fit the screen
+)
+
+
+def save_db(db: pd.DataFrame) -> None:
+    with open(f"{DB_PATH}/users.json", mode='w', encoding='utf-8') as file:
+        db.to_json(file, orient='records', lines=True, force_ascii=False)
 
 
 # Функция-обработчик команды /start
 def start(update: Update, context: CallbackContext) -> None:
-    
-    user_id = update.message.chat.id
+    global db
+    chat_id = update.message.chat.id
     user_name = update.message.chat.first_name
-    
-    button1 = KeyboardButton("/start")
-    button2 = KeyboardButton("/help")
-    button3 = KeyboardButton("загадай")
-    button4 = KeyboardButton("расскажи о")
 
-    kb_commands = ReplyKeyboardMarkup(
-        keyboard=[
-            [button1, button2],
-            [button3, button4]
-        ],
-        resize_keyboard=True  # Optional: Resizes the keyboard to fit the screen
-    )
+    if (chat_id not in db["chat_id"].values):
+        new_user = pd.DataFrame({"user_name": [user_name], "chat_id": [chat_id], "current_country": [None], "current_answer": [None], "countries_history": [[]]})
+        db = pd.concat([db, new_user], ignore_index=True)
+        save_db(db)
 
-    update.message.reply_text(f"Привет, {user_name}! Начнем викторину? \nВыберите команду:", reply_markup=kb_commands)
+    update.message.reply_text(f"Привет, {user_name}! Начнем викторину? \nВыберите команду:", reply_markup=kb_basic)
 
 
 def help(update: Update, context: CallbackContext):
@@ -66,27 +82,69 @@ def help(update: Update, context: CallbackContext):
 1) '<b>загадай</b>' — для загадывания страны\n\
 2) '<b>подскажи *</b>', где * это слово из (природу, достопримечательности, культуру, язык, исторический факт, города, часть названия) — для подсказки\n\
 3) '<b>сдаюсь</b>' — чтобы признать поражение и узнать, какой стране принадлежит флаг\n\
-4) '<b>расскажи о *</b>', где * это название страны — чтобы бот мог поведать информацию о ней, без загадывания (для произвольной страны вместо * нужно написать 'любой')\n\
+4) '<b>расскажи о стране *</b>', где * это название страны — чтобы бот мог поведать информацию о ней, без загадывания (для произвольной страны вместо * нужно написать 'любой')\n\
 5) ну и конечно же само <b>название страны</b>, если она была загадана", parse_mode='HTML') # отправляем сообщение (text) в чат (chat_id) 
 
 
 def repeat(update: Update, context: CallbackContext) -> None:
     update.message.reply_text(update.message.text)
-    
+
+
 def send_flag(update: Update, context: CallbackContext) -> None:
-    
+    global db
+    chat_id = update.message.chat.id
+
     country_number = random.choices(np.arange(len(data)), k=1)[0]
-    
     country_name = list(data.keys())[country_number]
     
     flag_path = data[country_name]['flag']
-    
+    context.bot.send_photo(chat_id=chat_id, photo=open(flag_path, 'rb'), caption=f"В названии вашей страны присутствуют {len(country_name)} символов!")
+
+    db.loc[db["chat_id"] == chat_id, "current_country"] = country_name
+
+    current_answer = ["*" for i in range(len(country_name))]
+    for idx, char in enumerate(country_name):
+        if char in [" ", "—", "-", "'"]:
+            current_answer[idx] = char
+    db.loc[db["chat_id"] == chat_id, "current_answer"] = "".join(current_answer)
+
+    save_db(db)
+
+
+def answer_flag(update: Update, context: CallbackContext) -> None:
+    global db
     chat_id = update.message.chat.id
-    
-    context.bot.send_photo(chat_id=chat_id, photo=open(flag_path, 'rb'))
-    
+
+    answer_given = update.message.text
+    answer_expected = db.loc[db["chat_id"] == chat_id, "current_country"].iloc[0]
+
+    if answer_expected is None:
+        update.message.reply_text(f"Вы ещё не загадали страну! \nВыберите следующую команду:", reply_markup=kb_basic)
+        return
+
+    if answer_given.lower() == answer_expected.lower():
+        update.message.reply_text(f"Поздравляю, страна {answer_expected} угадана! \nВыберите следующую команду:", reply_markup=kb_basic)
+
+        db.loc[db["chat_id"] == chat_id, "current_country"] = None
+        db.loc[db["chat_id"] == chat_id, "current_answer"] = None
+        db.loc[db["chat_id"] == chat_id, "countries_history"].iloc[0].append(answer_expected)
+    else:
+        correct_letters = 0 # число совпавших букв
+        current_answer = list(db.loc[db["chat_id"] == chat_id, "current_answer"].iloc[0])
+
+        for i in range(min(len(answer_given), len(answer_expected))): # идём по минимальной длине
+            if answer_given[i].lower() == answer_expected[i].lower(): # сравниваем буквы на позициях
+                correct_letters += 1 # увеличиваем число совпадений
+                current_answer[i] = answer_given[i]
+        current_answer = "".join(current_answer)
+        
+        db.loc[db["chat_id"] == chat_id, "current_answer"] = current_answer
+
+        update.message.reply_text(f"Совпадений {correct_letters}: {current_answer}. \nПопытайся ещё раз!", reply_markup=kb_basic)
+    save_db(db)
+
+
 def tell_about(update: Update, context: CallbackContext) -> None:
-    
     print(update)
     print(context)
     #country_name = list(data.keys())[country_number]
@@ -98,37 +156,24 @@ def tell_about(update: Update, context: CallbackContext) -> None:
     #context.bot.send_photo(chat_id=chat_id, photo=open(flag_path, 'rb'))
 
 
-#def error(update: Update, context: CallbackContext) -> None:
-    #logger.warning(f'Update {update} caused error {context.error}')
-
-def init_db():
-    conn = sqlite3.connect('bot.db')
-    cursor = conn.cursor()
-    cursor.execute('''CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, username TEXT)''')
-    conn.commit()
-    conn.close()
-
-def add_user(user_id, username):
-    conn = sqlite3.connect('bot.db')
-    cursor = conn.cursor()
-    cursor.execute('''INSERT INTO users (id, username) VALUES (?, ?)''', (user_id, username))
-    conn.commit()
-    conn.close()
+# def error(update: Update, context: CallbackContext) -> None:
+#     logger.warning(f'Update {update} caused error {context.error}')
 
 
 def main():
-    updater = Updater(token) # API для взаимодействия с ботом
+    updater = Updater(TOKEN) # API для взаимодействия с ботом
 
     dispatcher = updater.dispatcher # получение диспетчера для регистрации обработчиков
 
     # Регистрация обработчика команд
     dispatcher.add_handler(CommandHandler("start", start))
     dispatcher.add_handler(CommandHandler("help", help))
-    #dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, repeat))
+    # dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, repeat))
     dispatcher.add_handler(MessageHandler(Filters.regex(r"загадай"), send_flag))
-    dispatcher.add_handler(MessageHandler(Filters.regex(r"расскажи о"), tell_about))  
+    dispatcher.add_handler(MessageHandler(Filters.regex(r"расскажи о"), tell_about))
+    dispatcher.add_handler(MessageHandler(Filters.text, answer_flag)) 
     
-    #dispatcher.add_error_handler(error)
+    # dispatcher.add_error_handler(error)
 
     updater.start_polling() # Запуск бота
 
