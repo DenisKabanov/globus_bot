@@ -41,7 +41,7 @@ for country_name in os.listdir(DATA_PATH):
             data[country_name]["description"][hint] = f.readline()[len(hint) + 2:]
             f.readline()
         
-        data[country_name]["description"]["Общее описание"] = f.readline(-1)
+        data[country_name]["description"]["Общее описание"] = "".join(f.readlines(-1))
 
 
 button1 = KeyboardButton("/start")
@@ -53,6 +53,24 @@ kb_basic = ReplyKeyboardMarkup(
     keyboard=[
         [button1, button2],
         [button3, button4]
+    ],
+    resize_keyboard=True  # Optional: Resizes the keyboard to fit the screen
+)
+
+button_help1 = KeyboardButton("подскажи природу")
+button_help2 = KeyboardButton("подскажи достопримечательность")
+button_help3 = KeyboardButton("подскажи культуру")
+button_help4 = KeyboardButton("подскажи язык")
+button_help5 = KeyboardButton("подскажи исторический факт")
+button_help6 = KeyboardButton("подскажи города")
+button_help7 = KeyboardButton("подскажи часть названия")
+
+kb_help = ReplyKeyboardMarkup(
+    keyboard=[
+        [button_help1, button_help2],
+        [button_help3, button_help4],
+        [button_help5, button_help6],
+        [button_help7]
     ],
     resize_keyboard=True  # Optional: Resizes the keyboard to fit the screen
 )
@@ -98,7 +116,7 @@ def send_flag(update: Update, context: CallbackContext) -> None:
     country_name = list(data.keys())[country_number]
     
     flag_path = data[country_name]['flag']
-    context.bot.send_photo(chat_id=chat_id, photo=open(flag_path, 'rb'), caption=f"В названии вашей страны присутствуют {len(country_name)} символов!")
+    context.bot.send_photo(chat_id=chat_id, photo=open(flag_path, 'rb'), caption=f"В названии вашей страны присутствуют {len(country_name)} символов!", reply_markup=kb_help)
 
     db.loc[db["chat_id"] == chat_id, "current_country"] = country_name
 
@@ -123,7 +141,10 @@ def answer_flag(update: Update, context: CallbackContext) -> None:
         return
 
     if answer_given.lower() == answer_expected.lower():
-        update.message.reply_text(f"Поздравляю, страна {answer_expected} угадана! \nВыберите следующую команду:", reply_markup=kb_basic)
+        map_path = data[answer_expected]["map"]
+        description = data[answer_expected]["description"]["Общее описание"]
+        context.bot.send_photo(chat_id=chat_id, photo=open(map_path, 'rb'), caption=f"Поздравляю, страна {answer_expected} угадана! \n{description}")
+        update.message.reply_text(f"Выберите следующую команду:", reply_markup=kb_basic)
 
         db.loc[db["chat_id"] == chat_id, "current_country"] = None
         db.loc[db["chat_id"] == chat_id, "current_answer"] = None
@@ -140,9 +161,32 @@ def answer_flag(update: Update, context: CallbackContext) -> None:
         
         db.loc[db["chat_id"] == chat_id, "current_answer"] = current_answer
 
-        update.message.reply_text(f"Совпадений {correct_letters}: {current_answer}. \nПопытайся ещё раз!", reply_markup=kb_basic)
+        update.message.reply_text(f"Совпадений {correct_letters}: {current_answer}. \nПопытайся ещё раз!", reply_markup=kb_help)
     save_db(db)
 
+def hint(update: Update, context: CallbackContext) -> None:
+    #global db
+    chat_id = update.message.chat.id
+    type_of_help = update.message.text[9:]
+    help_nature = data[country_name]["description"]['Природа']
+    help_attractions = data[country_name]["description"]['Достопримечательности']
+    for hint in ["Природа", "Достопримечательности", "Культура", "Язык", "Исторический факт", "Города"]:
+            data[country_name]["description"][hint] = f.readline()[len(hint) + 2:]
+            f.readline()
+    if type_of_help.lower() == 'природу':
+        hint = data[country_name]['description']['Природа']
+    if type_of_help.lower() == 'достопримечательность':
+        hint = data[country_name]['description']['Достопримечательности']
+    if type_of_help.lower() == 'культуру':
+        hint = data[country_name]['description']['Культура']
+    if type_of_help.lower() == 'язык':
+        hint = data[country_name]['description']['Язык']
+    if type_of_help.lower() == 'исторический факт':
+        hint = data[country_name]['description']['Исторический факт']
+    if type_of_help.lower() == 'города':
+        hint = data[country_name]['description']['Города']
+    if type_of_help.lower() == 'названия':
+        hint = data[country_name]['description']['Города']
 
 def tell_about(update: Update, context: CallbackContext) -> None:
     print(update)
