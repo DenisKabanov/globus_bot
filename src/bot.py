@@ -9,10 +9,9 @@ import numpy as np
 import pandas as pd
 from pyxdameraulevenshtein import damerau_levenshtein_distance # для подсчёта минимального числа изменений в первой строке, чтобы она стала идентичной второй
 from dotenv import load_dotenv # для загрузки переменных окружения
-from telegram import Update, KeyboardButton
+from telegram import Update, KeyboardButton, InlineKeyboardButton, ReplyKeyboardMarkup, InlineKeyboardMarkup
 from telegram.ext import Updater, CommandHandler, CallbackContext
 from telegram.ext import MessageHandler, Filters
-from telegram import ReplyKeyboardMarkup
 # import logging # для логирования
 
 
@@ -26,7 +25,16 @@ db = pd.DataFrame()
 if os.path.exists(f"{DB_PATH}/users.json"):
     db = pd.read_json(f"{DB_PATH}/users.json", lines=True)
 else:
-    db = pd.DataFrame(columns=["user_name", "chat_id", "current_country", "current_answer", "countries_history"])
+    variables = {
+        "user_name": str(),
+        "chat_id": int(),
+        "current_country": str(),
+        "current_answer": str(),
+        "countries_history": list(),
+    }
+
+    db = pd.DataFrame(columns=variables, index=[])
+    # db = pd.DataFrame(columns=["user_name", "chat_id", "current_country", "current_answer", "countries_history"], dtype=dtypes)
     db.to_json(f"{DB_PATH}/users.json", orient='records', lines=True, force_ascii=False)
 
 
@@ -43,13 +51,13 @@ for country_name in os.listdir(DATA_PATH):
             f.readline()
         
         data[country_name]["description"]["Общее описание"] = "".join(f.readlines(-1))
+countries_all = set(data.keys()) # set с названиями всех стран
 
 
 button1 = KeyboardButton("/start")
 button2 = KeyboardButton("/help")
 button3 = KeyboardButton("загадай")
 button4 = KeyboardButton("расскажи о стране")
-
 kb_basic = ReplyKeyboardMarkup(
     keyboard=[
         [button1, button2],
@@ -57,6 +65,7 @@ kb_basic = ReplyKeyboardMarkup(
     ],
     resize_keyboard=True  # Optional: Resizes the keyboard to fit the screen
 )
+
 
 button_help1 = KeyboardButton("подскажи природу")
 button_help2 = KeyboardButton("подскажи достопримечательность")
@@ -66,13 +75,23 @@ button_help5 = KeyboardButton("подскажи исторический фак�
 button_help6 = KeyboardButton("подскажи города")
 button_help7 = KeyboardButton("подскажи часть названия")
 button_help8 = KeyboardButton("подскажи буквы")
-
+button_surrender = KeyboardButton("сдаюсь")
 kb_help = ReplyKeyboardMarkup(
     keyboard=[
         [button_help1, button_help2],
         [button_help3, button_help4],
         [button_help5, button_help6],
-        [button_help7, button_help8]
+        [button_help7, button_help8],
+        [button_surrender]
+    ],
+    resize_keyboard=True  # Optional: Resizes the keyboard to fit the screen
+)
+
+
+button_reset = KeyboardButton(text="очистить историю")
+kb_reset = ReplyKeyboardMarkup(
+    keyboard=[
+        [button_reset]
     ],
     resize_keyboard=True  # Optional: Resizes the keyboard to fit the screen
 )
@@ -106,16 +125,28 @@ def help(update: Update, context: CallbackContext):
 5) ну и конечно же само <b>название страны</b>, если она была загадана", parse_mode='HTML') # отправляем сообщение (text) в чат (chat_id) 
 
 
-def repeat(update: Update, context: CallbackContext) -> None:
-    update.message.reply_text(update.message.text)
+def clear_history(update: Update, context: CallbackContext):
+    global db
+    chat_id = update.message.chat.id
+
+    db.loc[db["chat_id"] == chat_id, "current_country"] = None
+    db.loc[db["chat_id"] == chat_id, "current_answer"] = None
+    db.loc[db["chat_id"] == chat_id, "countries_history"].iloc[0].clear()
+    save_db(db)
+
+    update.message.reply_text(f"История взаимодействия с приложением очищена!", reply_markup=kb_basic)
 
 
 def send_flag(update: Update, context: CallbackContext) -> None:
     global db
     chat_id = update.message.chat.id
 
-    country_number = random.choices(range(len(data)), k=1)[0]
-    country_name = list(data.keys())[country_number]
+    countries_history = set(db.loc[db["chat_id"] == chat_id, "countries_history"].iloc[0])
+    if len(countries_history) == len(countries_all):
+        update.message.reply_text(f"Поздравляем, Вы отгадали все {len(countries_history)} стран! Хотите начать новую викторину?", reply_markup=kb_reset)
+        return
+
+    country_name = random.choices(list(countries_all - countries_history), k=1)[0]
     
     flag_path = data[country_name]['flag']
     context.bot.send_photo(chat_id=chat_id, photo=open(flag_path, 'rb'), caption=f"В названии вашей страны присутствуют {len(country_name)} символов!", reply_markup=kb_help)
@@ -165,6 +196,26 @@ def answer_flag(update: Update, context: CallbackContext) -> None:
 
         update.message.reply_text(f"Совпадений {correct_letters}: {current_answer}. \nПопытайся ещё раз!", reply_markup=kb_help)
     save_db(db)
+
+
+def surrender(update: Update, context: CallbackContext) -> None:
+    global db
+    chat_id = update.message.chat.id
+
+    answer_expected = db.loc[db["chat_id"] == chat_id, "current_country"].iloc[0]
+
+    if answer_expected is None:
+        update.message.reply_text(f"Вы ещё не загадали страну! \nВыберите следующую команду:", reply_markup=kb_basic)
+    else:
+        map_path = data[answer_expected]["map"]
+        description = data[answer_expected]["description"]["Общее описание"]
+        context.bot.send_photo(chat_id=chat_id, photo=open(map_path, 'rb'), caption=f"Вам была загадана страна {answer_expected}. \n{description}")
+        update.message.reply_text(f"Выберите следующую команду:", reply_markup=kb_basic)
+
+        db.loc[db["chat_id"] == chat_id, "current_country"] = None
+        db.loc[db["chat_id"] == chat_id, "current_answer"] = None
+        save_db(db)
+
 
 def hint(update: Update, context: CallbackContext) -> None:
     chat_id = update.message.chat.id
@@ -229,9 +280,12 @@ def main():
     # Регистрация обработчика команд
     dispatcher.add_handler(CommandHandler("start", start))
     dispatcher.add_handler(CommandHandler("help", help))
+    dispatcher.add_handler(CommandHandler("clear_history", clear_history))
+    dispatcher.add_handler(MessageHandler(Filters.regex(r"[О|о]чистить историю"), clear_history))
     # dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, repeat))
     dispatcher.add_handler(MessageHandler(Filters.regex(r"[З|з]агадай"), send_flag))
     dispatcher.add_handler(MessageHandler(Filters.regex(r"[П|п]одскажи .*"), hint))
+    dispatcher.add_handler(MessageHandler(Filters.regex(r"[С|с]даюсь"), surrender))
     dispatcher.add_handler(MessageHandler(Filters.regex(r"[Р|р]асскажи о"), tell_about))
     dispatcher.add_handler(MessageHandler(Filters.text, answer_flag)) 
     
