@@ -9,9 +9,8 @@ import numpy as np
 import pandas as pd
 from pyxdameraulevenshtein import damerau_levenshtein_distance # для подсчёта минимального числа изменений в первой строке, чтобы она стала идентичной второй
 from dotenv import load_dotenv # для загрузки переменных окружения
-from telegram import Update, KeyboardButton, InlineKeyboardButton, ReplyKeyboardMarkup, InlineKeyboardMarkup
-from telegram.ext import Updater, CommandHandler, CallbackContext
-from telegram.ext import MessageHandler, Filters
+from telegram import Update, KeyboardButton, ReplyKeyboardMarkup, InputMediaPhoto
+from telegram.ext import Updater, CommandHandler, CallbackContext, MessageHandler, Filters
 # import logging # для логирования
 
 
@@ -34,7 +33,6 @@ else:
     }
 
     db = pd.DataFrame(columns=variables, index=[])
-    # db = pd.DataFrame(columns=["user_name", "chat_id", "current_country", "current_answer", "countries_history"], dtype=dtypes)
     db.to_json(f"{DB_PATH}/users.json", orient='records', lines=True, force_ascii=False)
 
 
@@ -54,14 +52,11 @@ for country_name in os.listdir(DATA_PATH):
 countries_all = set(data.keys()) # set с названиями всех стран
 
 
-button1 = KeyboardButton("/start")
-button2 = KeyboardButton("/help")
-button3 = KeyboardButton("загадай")
-button4 = KeyboardButton("расскажи о стране")
+button1 = KeyboardButton("загадай")
+button2 = KeyboardButton("расскажи о стране")
 kb_basic = ReplyKeyboardMarkup(
     keyboard=[
-        [button1, button2],
-        [button3, button4]
+        [button1, button2]
     ],
     resize_keyboard=True  # Optional: Resizes the keyboard to fit the screen
 )
@@ -148,8 +143,10 @@ def send_flag(update: Update, context: CallbackContext) -> None:
 
     country_name = random.choices(list(countries_all - countries_history), k=1)[0]
     
-    flag_path = data[country_name]['flag']
-    context.bot.send_photo(chat_id=chat_id, photo=open(flag_path, 'rb'), caption=f"В названии вашей страны присутствуют {len(country_name)} символов!", reply_markup=kb_help)
+    flag_path = data[country_name]["flag"]
+
+    update.message.reply_text(f"{country_name}")
+    context.bot.send_photo(chat_id=chat_id, photo=open(flag_path, "rb"), caption=f"В названии вашей страны присутствуют {len(country_name)} символов!", reply_markup=kb_help)
 
     db.loc[db["chat_id"] == chat_id, "current_country"] = country_name
 
@@ -176,7 +173,16 @@ def answer_flag(update: Update, context: CallbackContext) -> None:
     if answer_given.lower() == answer_expected.lower():
         map_path = data[answer_expected]["map"]
         description = data[answer_expected]["description"]["Общее описание"]
-        context.bot.send_photo(chat_id=chat_id, photo=open(map_path, 'rb'), caption=f"Поздравляю, страна {answer_expected} угадана! \n{description}")
+        context.bot.send_photo(chat_id=chat_id, photo=open(map_path, "rb"), caption=f"Поздравляю, страна {answer_expected} угадана! \n{description}")
+        update.message.reply_text(f"Выберите следующую команду:", reply_markup=kb_basic)
+
+        db.loc[db["chat_id"] == chat_id, "current_country"] = None
+        db.loc[db["chat_id"] == chat_id, "current_answer"] = None
+        db.loc[db["chat_id"] == chat_id, "countries_history"].iloc[0].append(answer_expected)
+    elif (answer_expected == "Китайская Народная Республика") and (answer_given.lower() == "китай"):
+        map_path = data[answer_expected]["map"]
+        description = data[answer_expected]["description"]["Общее описание"]
+        context.bot.send_photo(chat_id=chat_id, photo=open(map_path, "rb"), caption=f"Поздравляю, страна {answer_expected} угадана! \n{description}")
         update.message.reply_text(f"Выберите следующую команду:", reply_markup=kb_basic)
 
         db.loc[db["chat_id"] == chat_id, "current_country"] = None
@@ -209,7 +215,7 @@ def surrender(update: Update, context: CallbackContext) -> None:
     else:
         map_path = data[answer_expected]["map"]
         description = data[answer_expected]["description"]["Общее описание"]
-        context.bot.send_photo(chat_id=chat_id, photo=open(map_path, 'rb'), caption=f"Вам была загадана страна {answer_expected}. \n{description}")
+        context.bot.send_photo(chat_id=chat_id, photo=open(map_path, "rb"), caption=f"Вам была загадана страна {answer_expected}. \n{description}")
         update.message.reply_text(f"Выберите следующую команду:", reply_markup=kb_basic)
 
         db.loc[db["chat_id"] == chat_id, "current_country"] = None
@@ -225,17 +231,17 @@ def hint(update: Update, context: CallbackContext) -> None:
     name_len = len(country_name)
 
     if damerau_levenshtein_distance(hint_type, "природу") <= 2:
-        hint = data[country_name]['description']['Природа']
+        hint = data[country_name]["description"]["Природа"]
     elif damerau_levenshtein_distance(hint_type, "достопримечательность") <= 2:
-        hint = data[country_name]['description']['Достопримечательности']
+        hint = data[country_name]["description"]["Достопримечательности"]
     elif damerau_levenshtein_distance(hint_type, "культуру") <= 2:
-        hint = data[country_name]['description']['Культура']
+        hint = data[country_name]["description"]["Культура"]
     elif damerau_levenshtein_distance(hint_type, "язык") <= 2:
-        hint = data[country_name]['description']['Язык']
+        hint = data[country_name]["description"]["Язык"]
     elif damerau_levenshtein_distance(hint_type, "исторический факт") <= 2:
-        hint = data[country_name]['description']['Исторический факт']
+        hint = data[country_name]["description"]["Исторический факт"]
     elif damerau_levenshtein_distance(hint_type, "города") <= 2:
-        hint = data[country_name]['description']['Города']
+        hint = data[country_name]["description"]["Города"]
     elif damerau_levenshtein_distance(hint_type, "часть названия") <= 2:
         start_idx, end_idx = sorted(random.sample(range(name_len), k=2)) # с какой по какую буквы подсказываем
         hint = "" # для подсказки части слова
@@ -257,16 +263,42 @@ def hint(update: Update, context: CallbackContext) -> None:
 
 
 def tell_about(update: Update, context: CallbackContext) -> None:
-    print(update)
-    print(context)
-    #country_name = list(data.keys())[country_number]
-    
-    #flag_path = data[country_name]['flag']
-    
-    #chat_id = update.message.chat.id
-    
-    #context.bot.send_photo(chat_id=chat_id, photo=open(flag_path, 'rb'))
+    global db
+    chat_id = update.message.chat.id
 
+    country_name = update.message.text[17:].strip()
+    countries_history = set(db.loc[db["chat_id"] == chat_id, "countries_history"].iloc[0])
+
+    if (len(country_name) <= 2) or (damerau_levenshtein_distance(country_name, "любой") <= 2):
+        country_name = random.choices(list(countries_all - countries_history), k=1)[0]
+        flag_path = data[country_name]["flag"]
+        map_path = data[country_name]["map"]
+        description = data[country_name]["description"]["Общее описание"]
+    else:
+        dist_best = 3
+        country_name_closest = ""
+        for country in countries_all:
+            dist = damerau_levenshtein_distance(country_name, country)
+            if dist < dist_best:
+                country_name_closest = country
+                dist_best = dist
+
+        if country_name_closest == "":
+            update.message.reply_text(f"Введённая страна {country_name} не найдена.", reply_markup=kb_basic)
+            return
+        else:  
+            flag_path = data[country_name_closest]["flag"]
+            map_path = data[country_name_closest]["map"]
+            description = data[country_name_closest]["description"]["Общее описание"]
+    
+    media = [
+        InputMediaPhoto(open(flag_path, "rb"), caption=description),
+        InputMediaPhoto(open(map_path, "rb"))
+    ]
+
+    # context.bot.send_media_group(chat_id=chat_id, media=media)
+    update.message.reply_media_group(media)
+    update.message.reply_text(f"Выберите следующую команду:", reply_markup=kb_basic)
 
 # def error(update: Update, context: CallbackContext) -> None:
 #     logger.warning(f'Update {update} caused error {context.error}')
