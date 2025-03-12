@@ -18,6 +18,7 @@ load_dotenv() # загрузка переменных окружения
 TOKEN = os.getenv("TOKEN") # берём токен бота из переменных окружения
 DATA_PATH = os.getenv("DATA_PATH")
 DB_PATH = os.getenv("DB_PATH")
+EXTRA_PATH = os.getenv("EXTRA_PATH")
 
 
 db = pd.DataFrame()
@@ -138,14 +139,15 @@ def send_flag(update: Update, context: CallbackContext) -> None:
 
     countries_history = set(db.loc[db["chat_id"] == chat_id, "countries_history"].iloc[0])
     if len(countries_history) == len(countries_all):
-        update.message.reply_text(f"Поздравляем, Вы отгадали все {len(countries_history)} стран! Хотите начать новую викторину?", reply_markup=kb_reset)
+        gif_animation = open(f"{EXTRA_PATH}/win.gif", "rb")
+        context.bot.send_animation(chat_id=chat_id, animation=gif_animation, caption=f"🎉Поздравляем, Вы отгадали все страны! Хотите начать новую викторину?🎉", reply_markup=kb_reset)
         return
 
     country_name = random.choices(list(countries_all - countries_history), k=1)[0]
     
     flag_path = data[country_name]["flag"]
 
-    update.message.reply_text(f"{country_name}")
+    # update.message.reply_text(f"{country_name}") # DEBUG
     context.bot.send_photo(chat_id=chat_id, photo=open(flag_path, "rb"), caption=f"В названии вашей страны присутствуют {len(country_name)} символов!", reply_markup=kb_help)
 
     db.loc[db["chat_id"] == chat_id, "current_country"] = country_name
@@ -170,16 +172,15 @@ def answer_flag(update: Update, context: CallbackContext) -> None:
         update.message.reply_text(f"Вы ещё не загадали страну! \nВыберите следующую команду:", reply_markup=kb_basic)
         return
 
-    if answer_given.lower() == answer_expected.lower():
-        map_path = data[answer_expected]["map"]
-        description = data[answer_expected]["description"]["Общее описание"]
-        context.bot.send_photo(chat_id=chat_id, photo=open(map_path, "rb"), caption=f"Поздравляю, страна {answer_expected} угадана! \n{description}")
-        update.message.reply_text(f"Выберите следующую команду:", reply_markup=kb_basic)
-
-        db.loc[db["chat_id"] == chat_id, "current_country"] = None
-        db.loc[db["chat_id"] == chat_id, "current_answer"] = None
-        db.loc[db["chat_id"] == chat_id, "countries_history"].iloc[0].append(answer_expected)
-    elif (answer_expected == "Китайская Народная Республика") and (answer_given.lower() == "китай"):
+    if (answer_given.lower() == answer_expected.lower()) or \
+       ((answer_expected == "Китайская Народная Республика") and (answer_given.lower() == "китай")) or \
+       ((answer_expected == "Корейская Народно-Демократическая Республика") and (answer_given.lower() == "кндр")) or \
+       ((answer_expected == "Объединенные Арабские Эмираты") and (answer_given.lower() == "оаэ")) or \
+       ((answer_expected == "Республика Корея") and (answer_given.lower() == "южная корея")) or \
+       ((answer_expected == "Сахарская Арабская Демократическая Республика") and (answer_given.lower() == "садр")) or \
+       ((answer_expected == "Соединенные Штаты Америки") and (answer_given.lower() == "сша")) or \
+       ((answer_expected == "Турецкая Республика Северного Кипра") and (answer_given.lower() == "трск")) or \
+       ((answer_expected == "Южно-Африканская Республика") and (answer_given.lower() == "юар")):
         map_path = data[answer_expected]["map"]
         description = data[answer_expected]["description"]["Общее описание"]
         context.bot.send_photo(chat_id=chat_id, photo=open(map_path, "rb"), caption=f"Поздравляю, страна {answer_expected} угадана! \n{description}")
@@ -296,7 +297,6 @@ def tell_about(update: Update, context: CallbackContext) -> None:
         InputMediaPhoto(open(map_path, "rb"))
     ]
 
-    # context.bot.send_media_group(chat_id=chat_id, media=media)
     update.message.reply_media_group(media)
     update.message.reply_text(f"Выберите следующую команду:", reply_markup=kb_basic)
 
