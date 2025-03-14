@@ -31,6 +31,9 @@ else:
         "current_country": str(),
         "current_answer": str(),
         "countries_history": list(),
+        "total_score" : int(),
+        "best_score" : int(),
+        "countries_hint" : dict()
     }
 
     db = pd.DataFrame(columns=variables, index=[])
@@ -63,14 +66,14 @@ kb_basic = ReplyKeyboardMarkup(
 )
 
 
-button_help1 = KeyboardButton("подскажи природу")
-button_help2 = KeyboardButton("подскажи достопримечательность")
-button_help3 = KeyboardButton("подскажи культуру")
-button_help4 = KeyboardButton("подскажи язык")
-button_help5 = KeyboardButton("подскажи исторический факт")
-button_help6 = KeyboardButton("подскажи города")
-button_help7 = KeyboardButton("подскажи часть названия")
-button_help8 = KeyboardButton("подскажи буквы")
+button_help1 = KeyboardButton("подскажи природу (-10 балл)")
+button_help2 = KeyboardButton("подскажи достопримечательность (-10 балл)")
+button_help3 = KeyboardButton("подскажи культуру (-10 балл)")
+button_help4 = KeyboardButton("подскажи язык (-10 балл)")
+button_help5 = KeyboardButton("подскажи исторический факт (-10 балл)")
+button_help6 = KeyboardButton("подскажи города (-10 балл)")
+button_help7 = KeyboardButton("подскажи часть названия (-40 балла)")
+button_help8 = KeyboardButton("подскажи буквы (-20 балла)")
 button_surrender = KeyboardButton("сдаюсь")
 kb_help = ReplyKeyboardMarkup(
     keyboard=[
@@ -105,7 +108,8 @@ def start(update: Update, context: CallbackContext) -> None:
     user_name = update.message.chat.first_name
 
     if (chat_id not in db["chat_id"].values):
-        new_user = pd.DataFrame({"user_name": [user_name], "chat_id": [chat_id], "current_country": [None], "current_answer": [None], "countries_history": [[]]})
+        new_user = pd.DataFrame({"user_name": [user_name], "chat_id": [chat_id], "current_country": [""], "current_answer": [""],
+                                 "countries_history": [[]], "current_score": [0], "total_score": [0], "best_score": [0], "countries_hint": [{}]})
         db = pd.concat([db, new_user], ignore_index=True)
         save_db(db)
 
@@ -125,9 +129,13 @@ def clear_history(update: Update, context: CallbackContext):
     global db
     chat_id = update.message.chat.id
 
-    db.loc[db["chat_id"] == chat_id, "current_country"] = None
-    db.loc[db["chat_id"] == chat_id, "current_answer"] = None
+    db.loc[db["chat_id"] == chat_id, "current_country"] = ""
+    db.loc[db["chat_id"] == chat_id, "current_answer"] = ""
     db.loc[db["chat_id"] == chat_id, "countries_history"].iloc[0].clear()
+    db.loc[db["chat_id"] == chat_id, "current_score"] = 0
+    db.loc[db["chat_id"] == chat_id, "total_score"] = 0
+    db.loc[db["chat_id"] == chat_id, "countries_hint"].iloc[0].clear()
+    
     save_db(db)
 
     update.message.reply_text(f"История взаимодействия с приложением очищена!", reply_markup=kb_basic)
@@ -150,6 +158,7 @@ def send_flag(update: Update, context: CallbackContext) -> None:
     # update.message.reply_text(f"{country_name}") # DEBUG
     context.bot.send_photo(chat_id=chat_id, photo=open(flag_path, "rb"), caption=f"В названии вашей страны присутствуют {len(country_name)} символов!", reply_markup=kb_help)
 
+    db.loc[db["chat_id"] == chat_id, "current_score"] = 100
     db.loc[db["chat_id"] == chat_id, "current_country"] = country_name
 
     current_answer = ["*" for i in range(len(country_name))]
@@ -167,11 +176,18 @@ def answer_flag(update: Update, context: CallbackContext) -> None:
 
     answer_given = update.message.text
     answer_expected = db.loc[db["chat_id"] == chat_id, "current_country"].iloc[0]
+    current_score = db.loc[db["chat_id"] == chat_id, "current_score"].iloc[0]
+    total_score = db.loc[db["chat_id"] == chat_id, "total_score"].iloc[0]
+    best_score = db.loc[db["chat_id"] == chat_id, "best_score"].iloc[0]
+    countries_hint = db.loc[db["chat_id"] == chat_id, "countries_hint"].iloc[0]
 
-    if answer_expected is None:
+    if answer_expected == "":
         update.message.reply_text(f"Вы ещё не загадали страну! \nВыберите следующую команду:", reply_markup=kb_basic)
         return
-
+    
+    if answer_expected in countries_hint.keys():
+        current_score = current_score - countries_hint[answer_expected]
+            
     if (answer_given.lower() == answer_expected.lower()) or \
        ((answer_expected == "Китайская Народная Республика") and (answer_given.lower() == "китай")) or \
        ((answer_expected == "Корейская Народно-Демократическая Республика") and (answer_given.lower() == "кндр")) or \
@@ -183,13 +199,31 @@ def answer_flag(update: Update, context: CallbackContext) -> None:
        ((answer_expected == "Южно-Африканская Республика") and (answer_given.lower() == "юар")):
         map_path = data[answer_expected]["map"]
         description = data[answer_expected]["description"]["Общее описание"]
+        update.message.reply_text(f"Поздравляю, страна {answer_expected} угадана! За отгадывание страны вы получили {current_score}. Итого {total_score}")
         context.bot.send_photo(chat_id=chat_id, photo=open(map_path, "rb"), caption=f"Поздравляю, страна {answer_expected} угадана! \n{description}")
         update.message.reply_text(f"Выберите следующую команду:", reply_markup=kb_basic)
 
-        db.loc[db["chat_id"] == chat_id, "current_country"] = None
-        db.loc[db["chat_id"] == chat_id, "current_answer"] = None
+        new_total_score = total_score + max(0, current_score)
+        db.loc[db["chat_id"] == chat_id, "total_score"] = new_total_score
+        
+        if new_total_score > best_score:
+            db.loc[db["chat_id"] == chat_id, "best_score"] = new_total_score
+                
+        db.loc[db["chat_id"] == chat_id, "current_country"] = ""
+        db.loc[db["chat_id"] == chat_id, "current_answer"] = ""
         db.loc[db["chat_id"] == chat_id, "countries_history"].iloc[0].append(answer_expected)
+        db.loc[db["chat_id"] == chat_id, "countries_hint"].iloc[0].pop(answer_expected, None)
+        
     else:
+        
+        current_score = current_score - 1
+        db.loc[db["chat_id"] == chat_id, "current_score"] = current_score
+        
+        if answer_expected in countries_hint.keys():
+            countries_hint[answer_expected] = countries_hint[answer_expected] + 1
+        else:
+           countries_hint[answer_expected] = current_score 
+        
         correct_letters = 0 # число совпавших букв
         current_answer = list(db.loc[db["chat_id"] == chat_id, "current_answer"].iloc[0])
 
@@ -211,7 +245,7 @@ def surrender(update: Update, context: CallbackContext) -> None:
 
     answer_expected = db.loc[db["chat_id"] == chat_id, "current_country"].iloc[0]
 
-    if answer_expected is None:
+    if answer_expected == "":
         update.message.reply_text(f"Вы ещё не загадали страну! \nВыберите следующую команду:", reply_markup=kb_basic)
     else:
         map_path = data[answer_expected]["map"]
@@ -219,8 +253,8 @@ def surrender(update: Update, context: CallbackContext) -> None:
         context.bot.send_photo(chat_id=chat_id, photo=open(map_path, "rb"), caption=f"Вам была загадана страна {answer_expected}. \n{description}")
         update.message.reply_text(f"Выберите следующую команду:", reply_markup=kb_basic)
 
-        db.loc[db["chat_id"] == chat_id, "current_country"] = None
-        db.loc[db["chat_id"] == chat_id, "current_answer"] = None
+        db.loc[db["chat_id"] == chat_id, "current_country"] = ""
+        db.loc[db["chat_id"] == chat_id, "current_answer"] = ""
         save_db(db)
 
 
