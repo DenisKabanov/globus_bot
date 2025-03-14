@@ -2,6 +2,7 @@
 # файл для запуска телеграм бота
 #===============================================================================
 
+import re
 import json
 import os # для переменных окружения (токена бота)
 import random # для случайного выбора
@@ -68,8 +69,8 @@ kb_basic = ReplyKeyboardMarkup(
 
 button_help1 = KeyboardButton("подскажи природу (-10 балл)")
 button_help2 = KeyboardButton("подскажи достопримечательность (-10 балл)")
-button_help3 = KeyboardButton("подскажи культуру (-10 балл)")
-button_help4 = KeyboardButton("подскажи язык (-10 балл)")
+button_help3 = KeyboardButton("подскажи культуру (-5 балл)")
+button_help4 = KeyboardButton("подскажи язык (-5 балл)")
 button_help5 = KeyboardButton("подскажи исторический факт (-10 балл)")
 button_help6 = KeyboardButton("подскажи города (-10 балл)")
 button_help7 = KeyboardButton("подскажи часть названия (-40 балла)")
@@ -133,7 +134,6 @@ def clear_history(update: Update, context: CallbackContext):
     db.loc[db["chat_id"] == chat_id, "current_answer"] = ""
     db.loc[db["chat_id"] == chat_id, "countries_history"].iloc[0].clear()
     db.loc[db["chat_id"] == chat_id, "score_total"] = 0
-    db.loc[db["chat_id"] == chat_id, "score_best"] = 0
     db.loc[db["chat_id"] == chat_id, "score_countries"].iloc[0].clear()
     
     save_db(db)
@@ -144,11 +144,12 @@ def clear_history(update: Update, context: CallbackContext):
 def send_flag(update: Update, context: CallbackContext) -> None:
     global db
     chat_id = update.message.chat.id
+    total_score = db.loc[db["chat_id"] == chat_id, "score_total"].iloc[0]
 
     countries_history = set(db.loc[db["chat_id"] == chat_id, "countries_history"].iloc[0])
     if len(countries_history) == len(countries_all):
         gif_animation = open(f"{EXTRA_PATH}/win.gif", "rb")
-        context.bot.send_animation(chat_id=chat_id, animation=gif_animation, caption=f"🎉Поздравляем, Вы отгадали все страны! Хотите начать новую викторину?🎉", reply_markup=kb_reset)
+        context.bot.send_animation(chat_id=chat_id, animation=gif_animation, caption=f"🎉Поздравляем, Вы отгадали все страны! Общее количество заработанных баллов: {total_score}. Хотите начать новую викторину?🎉", reply_markup=kb_reset)
         return
 
     country_name = random.choices(list(countries_all - countries_history), k=1)[0]
@@ -177,17 +178,13 @@ def answer_flag(update: Update, context: CallbackContext) -> None:
     answer_given = update.message.text
     answer_expected = db.loc[db["chat_id"] == chat_id, "current_country"].iloc[0]
     score_countries = db.loc[db["chat_id"] == chat_id, "score_countries"].iloc[0]
-    # current_score = score_countries[answer_expected]
     current_country_score = score_countries[answer_expected]
     total_score = db.loc[db["chat_id"] == chat_id, "score_total"].iloc[0]
-    best_score = db.loc[db["chat_id"] == chat_id, "best_score"].iloc[0]
+    best_score = db.loc[db["chat_id"] == chat_id, "score_best"].iloc[0]
 
     if answer_expected == "":
         update.message.reply_text(f"Вы ещё не загадали страну! \nВыберите следующую команду:", reply_markup=kb_basic)
         return
-    
-    # if answer_expected in countries_hint.keys():
-    #     current_score = current_score - countries_hint[answer_expected]
             
     if (answer_given.lower() == answer_expected.lower()) or \
        ((answer_expected == "Китайская Народная Республика") and (answer_given.lower() == "китай")) or \
@@ -200,13 +197,14 @@ def answer_flag(update: Update, context: CallbackContext) -> None:
        ((answer_expected == "Южно-Африканская Республика") and (answer_given.lower() == "юар")):
         map_path = data[answer_expected]["map"]
         description = data[answer_expected]["description"]["Общее описание"]
-
-        new_total_score = total_score + max(0, current_country_score)
+        
+        current_country_score = max(0, current_country_score)
+        new_total_score = total_score + current_country_score
         db.loc[db["chat_id"] == chat_id, "score_total"] = new_total_score
         if new_total_score > best_score:
             db.loc[db["chat_id"] == chat_id, "score_best"] = new_total_score
 
-        update.message.reply_text(f"Поздравляю, страна {answer_expected} угадана! За отгадывание страны вы получили {current_country_score}. Текущий счёт: {new_total_score}.")
+        update.message.reply_text(f"Поздравляю, страна {answer_expected} угадана! Количество заработанных баллов: {current_country_score}. Текущий счёт: {new_total_score}.")
         context.bot.send_photo(chat_id=chat_id, photo=open(map_path, "rb"), caption=f"{description}")
         update.message.reply_text(f"Выберите следующую команду:", reply_markup=kb_basic)
 
@@ -252,25 +250,38 @@ def surrender(update: Update, context: CallbackContext) -> None:
 
 
 def hint(update: Update, context: CallbackContext) -> None:
+    global db
     chat_id = update.message.chat.id
-    hint_type = update.message.text[9:]
+    hint_type = re.findall("подскажи (.*?) \(", update.message.text)
+    
+    if len(hint_type) == 0:
+        update.message.reply_text(f"Введите корректную подсказку:", reply_markup=kb_help)
+        return
 
+    hint_type = hint_type[0]
     country_name = db.loc[db["chat_id"] == chat_id, "current_country"].iloc[0]
     name_len = len(country_name)
 
     if damerau_levenshtein_distance(hint_type, "природу") <= 2:
         hint = data[country_name]["description"]["Природа"]
+        db.loc[db["chat_id"] == chat_id, "score_countries"].iloc[0][country_name] -= 10
     elif damerau_levenshtein_distance(hint_type, "достопримечательность") <= 2:
         hint = data[country_name]["description"]["Достопримечательности"]
+        db.loc[db["chat_id"] == chat_id, "score_countries"].iloc[0][country_name] -= 10
     elif damerau_levenshtein_distance(hint_type, "культуру") <= 2:
         hint = data[country_name]["description"]["Культура"]
+        db.loc[db["chat_id"] == chat_id, "score_countries"].iloc[0][country_name] -= 5
     elif damerau_levenshtein_distance(hint_type, "язык") <= 2:
         hint = data[country_name]["description"]["Язык"]
+        db.loc[db["chat_id"] == chat_id, "score_countries"].iloc[0][country_name] -= 5
     elif damerau_levenshtein_distance(hint_type, "исторический факт") <= 2:
         hint = data[country_name]["description"]["Исторический факт"]
+        db.loc[db["chat_id"] == chat_id, "score_countries"].iloc[0][country_name] -= 10
     elif damerau_levenshtein_distance(hint_type, "города") <= 2:
         hint = data[country_name]["description"]["Города"]
+        db.loc[db["chat_id"] == chat_id, "score_countries"].iloc[0][country_name] -= 10
     elif damerau_levenshtein_distance(hint_type, "часть названия") <= 2:
+        db.loc[db["chat_id"] == chat_id, "score_countries"].iloc[0][country_name] -= 40
         start_idx, end_idx = sorted(random.sample(range(name_len), k=2)) # с какой по какую буквы подсказываем
         hint = "" # для подсказки части слова
         for i in range(name_len): # идём по числу букв в загаданном названии
@@ -279,6 +290,7 @@ def hint(update: Update, context: CallbackContext) -> None:
             else: # иначе
                 hint += "*" # зашифровываем букву
     elif damerau_levenshtein_distance(hint_type, "буквы") <= 2:
+        db.loc[db["chat_id"] == chat_id, "score_countries"].iloc[0][country_name] -= 20
         idx_to_show = sorted(random.sample(range(name_len), k=int(name_len/3))) # с какой по какую буквы подсказываем
         hint = "" # для подсказки части слова
         for i in range(name_len): # идём по числу букв в загаданном названии
@@ -286,8 +298,12 @@ def hint(update: Update, context: CallbackContext) -> None:
                 hint += country_name[i] # добавляем её саму
             else: # иначе
                 hint += "*" # зашифровываем букву
-
+    else:
+        update.message.reply_text(f"Введенной подсказки {hint_type} нет, введите корректную подсказку", reply_markup=kb_help)
+        return
+    
     update.message.reply_text(hint, reply_markup=kb_help)
+    save_db(db)
 
 
 def tell_about(update: Update, context: CallbackContext) -> None:
