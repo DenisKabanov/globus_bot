@@ -23,7 +23,7 @@ EXTRA_PATH = os.getenv("EXTRA_PATH")
 
 
 db = pd.DataFrame()
-if os.path.exists(f"{DB_PATH}/users.json"):
+if os.path.exists(f"{DB_PATH}/users.json") and os.path.getsize(f"{DB_PATH}/users.json") > 1: # проверка, что файл существует и в нём что-нибудь записано (минимальный размер файла - 1 байт, если он пуст)
     db = pd.read_json(f"{DB_PATH}/users.json", lines=True)
 else:
     variables = {
@@ -67,14 +67,14 @@ kb_basic = ReplyKeyboardMarkup(
 )
 
 
-button_help1 = KeyboardButton("подскажи природу (-10 балл)")
-button_help2 = KeyboardButton("подскажи достопримечательность (-10 балл)")
-button_help3 = KeyboardButton("подскажи культуру (-5 балл)")
-button_help4 = KeyboardButton("подскажи язык (-5 балл)")
-button_help5 = KeyboardButton("подскажи исторический факт (-10 балл)")
-button_help6 = KeyboardButton("подскажи города (-10 балл)")
-button_help7 = KeyboardButton("подскажи часть названия (-40 балла)")
-button_help8 = KeyboardButton("подскажи буквы (-20 балла)")
+button_help1 = KeyboardButton("подскажи природу (-10 баллов)")
+button_help2 = KeyboardButton("подскажи достопримечательность (-10 баллов)")
+button_help3 = KeyboardButton("подскажи культуру (-5 баллов)")
+button_help4 = KeyboardButton("подскажи язык (-5 баллов)")
+button_help5 = KeyboardButton("подскажи исторический факт (-10 баллов)")
+button_help6 = KeyboardButton("подскажи города (-10 баллов)")
+button_help7 = KeyboardButton("подскажи часть названия (-40 баллов)")
+button_help8 = KeyboardButton("подскажи буквы (-20 баллов)")
 button_surrender = KeyboardButton("сдаюсь")
 kb_help = ReplyKeyboardMarkup(
     keyboard=[
@@ -204,7 +204,7 @@ def answer_flag(update: Update, context: CallbackContext) -> None:
         if new_total_score > best_score:
             db.loc[db["chat_id"] == chat_id, "score_best"] = new_total_score
 
-        update.message.reply_text(f"Поздравляю, страна {answer_expected} угадана! Количество заработанных баллов: {current_country_score}. Текущий счёт: {new_total_score}.")
+        update.message.reply_text(f"Поздравляю, страна {answer_expected} угадана! \nКоличество заработанных баллов: {current_country_score}. \nТекущий счёт: {new_total_score}.")
         context.bot.send_photo(chat_id=chat_id, photo=open(map_path, "rb"), caption=f"{description}")
         update.message.reply_text(f"Выберите следующую команду:", reply_markup=kb_basic)
 
@@ -252,16 +252,19 @@ def surrender(update: Update, context: CallbackContext) -> None:
 def hint(update: Update, context: CallbackContext) -> None:
     global db
     chat_id = update.message.chat.id
-    hint_type = re.findall("подскажи (.*?) \(", update.message.text)
+    hint_type = re.findall("[П|п]одскажи (.*?)(?= \(|$)", update.message.text)
+    country_name = db.loc[db["chat_id"] == chat_id, "current_country"].iloc[0]
+    name_len = len(country_name)
+
+    if country_name == "":
+        update.message.reply_text(f"Вы ещё не загадали страну! \nВыберите следующую команду:", reply_markup=kb_basic)
+        return
     
     if len(hint_type) == 0:
         update.message.reply_text(f"Введите корректную подсказку:", reply_markup=kb_help)
         return
-
     hint_type = hint_type[0]
-    country_name = db.loc[db["chat_id"] == chat_id, "current_country"].iloc[0]
-    name_len = len(country_name)
-
+    
     if damerau_levenshtein_distance(hint_type, "природу") <= 2:
         hint = data[country_name]["description"]["Природа"]
         db.loc[db["chat_id"] == chat_id, "score_countries"].iloc[0][country_name] -= 10
