@@ -8,6 +8,9 @@ import os # для переменных окружения (токена бот�
 import random # для случайного выбора
 import numpy as np
 import pandas as pd
+import warnings
+from PIL import Image, ImageDraw, ImageFont
+import matplotlib.pyplot as plt # для построения графиков
 from pyxdameraulevenshtein import damerau_levenshtein_distance # для подсчёта минимального числа изменений в первой строке, чтобы она стала идентичной второй
 from dotenv import load_dotenv # для загрузки переменных окружения
 from telegram import Update, KeyboardButton, ReplyKeyboardMarkup, InputMediaPhoto
@@ -20,6 +23,7 @@ TOKEN = os.getenv("TOKEN") # берём токен бота из перемен�
 DATA_PATH = os.getenv("DATA_PATH")
 DB_PATH = os.getenv("DB_PATH")
 EXTRA_PATH = os.getenv("EXTRA_PATH")
+LEADERBOARD_SIZE = int(os.getenv("LEADERBOARD_SIZE"))
 
 
 db = pd.DataFrame()
@@ -59,9 +63,11 @@ countries_all = set(data.keys()) # set с названиями всех стра
 
 button1 = KeyboardButton("загадай")
 button2 = KeyboardButton("расскажи о стране")
+button3 = KeyboardButton("выведи таблицу лидеров")
 kb_basic = ReplyKeyboardMarkup(
     keyboard=[
         [button1, button2]
+        , [button3]
     ],
     resize_keyboard=True  # Optional: Resizes the keyboard to fit the screen
 )
@@ -246,6 +252,9 @@ def surrender(update: Update, context: CallbackContext) -> None:
 
         db.loc[db["chat_id"] == chat_id, "current_country"] = ""
         db.loc[db["chat_id"] == chat_id, "current_answer"] = ""
+        db.loc[db["chat_id"] == chat_id, "countries_history"].iloc[0].append(answer_expected)
+        db.loc[db["chat_id"] == chat_id, "score_countries"].iloc[0].pop(answer_expected, None)
+        
         save_db(db)
 
 
@@ -346,6 +355,24 @@ def tell_about(update: Update, context: CallbackContext) -> None:
     update.message.reply_media_group(media)
     update.message.reply_text(f"Выберите следующую команду:", reply_markup=kb_basic)
 
+def leaderboard(update: Update, context: CallbackContext) -> None:
+    chat_id = update.message.chat.id
+    
+    leaderboard = db.sort_values(by='score_best', ascending=False)
+    leaderboard.index = pd.RangeIndex(start=1, stop=len(leaderboard)+1, step=1)
+    leaderboard_user = leaderboard.loc[leaderboard["chat_id"] == chat_id]
+    leaderboard = leaderboard.head(LEADERBOARD_SIZE)
+    
+    leaderboard = leaderboard[["user_name", "score_best"]]
+    medals = {1: "🥇", 2: "🥈", 3: "🥉"}
+
+    string = ""
+    for i in leaderboard.index:
+        string += f"{medals[i] if i in medals.keys() else i}: {leaderboard['user_name'][i]}, набравший(ая) {leaderboard['score_best'][i]} баллов!\n"
+    string += f"\nВаше текущее место {leaderboard_user.index[0]} с суммой баллов {leaderboard_user['score_best'].iloc[0]}!{'🎉' if leaderboard_user.index[0] <=LEADERBOARD_SIZE else ''}"
+    update.message.reply_text(string, reply_markup=kb_basic)
+    
+    
 # def error(update: Update, context: CallbackContext) -> None:
 #     logger.warning(f'Update {update} caused error {context.error}')
 
@@ -359,6 +386,7 @@ def main():
     dispatcher.add_handler(CommandHandler("start", start))
     dispatcher.add_handler(CommandHandler("help", help))
     dispatcher.add_handler(CommandHandler("clear_history", clear_history))
+    dispatcher.add_handler(MessageHandler(Filters.regex(r"[В|в]ыведи таблицу лидеров"), leaderboard))
     dispatcher.add_handler(MessageHandler(Filters.regex(r"[О|о]чистить историю"), clear_history))
     # dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, repeat))
     dispatcher.add_handler(MessageHandler(Filters.regex(r"[З|з]агадай"), send_flag))
