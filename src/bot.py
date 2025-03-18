@@ -2,19 +2,14 @@
 # файл для запуска телеграм бота
 #===============================================================================
 
-import re
-import json
 import os # для переменных окружения (токена бота)
+import re # для регулярных выражений
 import random # для случайного выбора
-import numpy as np
-import pandas as pd
-import warnings
-from PIL import Image, ImageDraw, ImageFont
-import matplotlib.pyplot as plt # для построения графиков
-from pyxdameraulevenshtein import damerau_levenshtein_distance # для подсчёта минимального числа изменений в первой строке, чтобы она стала идентичной второй
+import pandas as pd # для работы с базой данных
 from dotenv import load_dotenv # для загрузки переменных окружения
 from telegram import Update, KeyboardButton, ReplyKeyboardMarkup, InputMediaPhoto
 from telegram.ext import Updater, CommandHandler, CallbackContext, MessageHandler, Filters
+from pyxdameraulevenshtein import damerau_levenshtein_distance # для подсчёта минимального числа изменений в первой строке, чтобы она стала идентичной второй
 # import logging # для логирования
 
 
@@ -74,20 +69,21 @@ kb_basic = ReplyKeyboardMarkup(
 
 
 button_help1 = KeyboardButton("подскажи природу (-10 баллов)")
-button_help2 = KeyboardButton("подскажи достопримечательность (-10 баллов)")
-button_help3 = KeyboardButton("подскажи культуру (-5 баллов)")
-button_help4 = KeyboardButton("подскажи язык (-5 баллов)")
-button_help5 = KeyboardButton("подскажи исторический факт (-10 баллов)")
-button_help6 = KeyboardButton("подскажи города (-10 баллов)")
-button_help7 = KeyboardButton("подскажи часть названия (-40 баллов)")
-button_help8 = KeyboardButton("подскажи буквы (-20 баллов)")
+button_help2 = KeyboardButton("подскажи культуру (-5 баллов)")
+button_help3 = KeyboardButton("подскажи язык (-5 баллов)")
+button_help4 = KeyboardButton("подскажи города (-20 баллов)")
+button_help5 = KeyboardButton("подскажи часть названия (-40 баллов)")
+button_help6 = KeyboardButton("подскажи буквы (-20 баллов)")
+button_help7 = KeyboardButton("подскажи достопримечательность (-15 баллов)")
+button_help8 = KeyboardButton("подскажи исторический факт (-10 баллов)")
 button_surrender = KeyboardButton("сдаюсь")
 kb_help = ReplyKeyboardMarkup(
     keyboard=[
         [button_help1, button_help2],
         [button_help3, button_help4],
         [button_help5, button_help6],
-        [button_help7, button_help8],
+        [button_help7], 
+        [button_help8],
         [button_surrender]
     ],
     resize_keyboard=True  # Optional: Resizes the keyboard to fit the screen
@@ -112,7 +108,10 @@ def save_db(db: pd.DataFrame) -> None:
 def start(update: Update, context: CallbackContext) -> None:
     global db
     chat_id = update.message.chat.id
+
     user_name = update.message.chat.first_name
+    if update.message.chat.last_name is not None:
+        user_name += f" {update.message.chat.last_name}"
 
     if (chat_id not in db["chat_id"].values):
         new_user = pd.DataFrame({"user_name": [user_name], "chat_id": [chat_id], "current_country": [""], "current_answer": [""],
@@ -120,16 +119,17 @@ def start(update: Update, context: CallbackContext) -> None:
         db = pd.concat([db, new_user], ignore_index=True)
         save_db(db)
 
-    update.message.reply_text(f"Привет, {user_name}! Начнем викторину? \nВыберите команду:", reply_markup=kb_basic)
+    update.message.reply_text(f"Привет, {user_name}! Начнём викторину? \nВыберите команду:", reply_markup=kb_basic)
 
 
 def help(update: Update, context: CallbackContext):
    update.message.reply_text(f"Поддерживаемые сообщения:\n\
 1) '<b>загадай</b>' — для загадывания страны\n\
-2) '<b>подскажи *</b>', где * это слово из (природу, достопримечательности, культуру, язык, исторический факт, города, часть названия) — для подсказки\n\
+2) '<b>подскажи *</b>', где * это слово из (природу, достопримечательности, культуру, язык, исторический факт, города, часть названия, буквы) — для подсказки\n\
 3) '<b>сдаюсь</b>' — чтобы признать поражение и узнать, какой стране принадлежит флаг\n\
 4) '<b>расскажи о стране *</b>', где * это название страны — чтобы бот мог поведать информацию о ней, без загадывания (для произвольной страны вместо * нужно написать 'любой')\n\
-5) ну и конечно же само <b>название страны</b>, если она была загадана", parse_mode='HTML') # отправляем сообщение (text) в чат (chat_id) 
+5) '<b>выведи таблицу лидеров</b>' — чтобы посмотреть рейтинг лучших игроков\n\
+6) ну и конечно же само <b>название страны</b>, если она была загадана", parse_mode='HTML') # отправляем сообщение (text) в чат (chat_id) 
 
 
 def clear_history(update: Update, context: CallbackContext):
@@ -163,16 +163,19 @@ def send_flag(update: Update, context: CallbackContext) -> None:
     flag_path = data[country_name]["flag"]
 
     # update.message.reply_text(f"{country_name}") # DEBUG
-    context.bot.send_photo(chat_id=chat_id, photo=open(flag_path, "rb"), caption=f"В названии вашей страны присутствуют {len(country_name)} символов!", reply_markup=kb_help)
 
     db.loc[db["chat_id"] == chat_id, "current_country"] = country_name
-    db.loc[db["chat_id"] == chat_id, "score_countries"].iloc[0][country_name] = 100
+    if country_name not in db.loc[db["chat_id"] == chat_id, "score_countries"].iloc[0]:
+        db.loc[db["chat_id"] == chat_id, "score_countries"].iloc[0][country_name] = 100
+    current_country_score = db.loc[db["chat_id"] == chat_id, "score_countries"].iloc[0][country_name]
 
     current_answer = ["*" for i in range(len(country_name))]
     for idx, char in enumerate(country_name):
         if char in [" ", "—", "-", "'"]:
             current_answer[idx] = char
     db.loc[db["chat_id"] == chat_id, "current_answer"] = "".join(current_answer)
+
+    context.bot.send_photo(chat_id=chat_id, photo=open(flag_path, "rb"), caption=f"В названии загаданной страны присутствует {len(country_name)} символов! За её отгадывание вы можете получить баллов: {current_country_score}.", reply_markup=kb_help)
 
     save_db(db)
 
@@ -183,14 +186,14 @@ def answer_flag(update: Update, context: CallbackContext) -> None:
 
     answer_given = update.message.text
     answer_expected = db.loc[db["chat_id"] == chat_id, "current_country"].iloc[0]
-    score_countries = db.loc[db["chat_id"] == chat_id, "score_countries"].iloc[0]
-    current_country_score = score_countries[answer_expected]
-    total_score = db.loc[db["chat_id"] == chat_id, "score_total"].iloc[0]
-    best_score = db.loc[db["chat_id"] == chat_id, "score_best"].iloc[0]
-
     if answer_expected == "":
         update.message.reply_text(f"Вы ещё не загадали страну! \nВыберите следующую команду:", reply_markup=kb_basic)
         return
+    
+    score_countries = db.loc[db["chat_id"] == chat_id, "score_countries"].iloc[0]
+    total_score = db.loc[db["chat_id"] == chat_id, "score_total"].iloc[0]
+    best_score = db.loc[db["chat_id"] == chat_id, "score_best"].iloc[0]
+    current_country_score = score_countries[answer_expected]
             
     if (answer_given.lower() == answer_expected.lower()) or \
        ((answer_expected == "Китайская Народная Республика") and (answer_given.lower() == "китай")) or \
@@ -279,7 +282,7 @@ def hint(update: Update, context: CallbackContext) -> None:
         db.loc[db["chat_id"] == chat_id, "score_countries"].iloc[0][country_name] -= 10
     elif damerau_levenshtein_distance(hint_type, "достопримечательность") <= 2:
         hint = data[country_name]["description"]["Достопримечательности"]
-        db.loc[db["chat_id"] == chat_id, "score_countries"].iloc[0][country_name] -= 10
+        db.loc[db["chat_id"] == chat_id, "score_countries"].iloc[0][country_name] -= 15
     elif damerau_levenshtein_distance(hint_type, "культуру") <= 2:
         hint = data[country_name]["description"]["Культура"]
         db.loc[db["chat_id"] == chat_id, "score_countries"].iloc[0][country_name] -= 5
@@ -291,7 +294,7 @@ def hint(update: Update, context: CallbackContext) -> None:
         db.loc[db["chat_id"] == chat_id, "score_countries"].iloc[0][country_name] -= 10
     elif damerau_levenshtein_distance(hint_type, "города") <= 2:
         hint = data[country_name]["description"]["Города"]
-        db.loc[db["chat_id"] == chat_id, "score_countries"].iloc[0][country_name] -= 10
+        db.loc[db["chat_id"] == chat_id, "score_countries"].iloc[0][country_name] -= 20
     elif damerau_levenshtein_distance(hint_type, "часть названия") <= 2:
         db.loc[db["chat_id"] == chat_id, "score_countries"].iloc[0][country_name] -= 40
         start_idx, end_idx = sorted(random.sample(range(name_len), k=2)) # с какой по какую буквы подсказываем
@@ -311,7 +314,7 @@ def hint(update: Update, context: CallbackContext) -> None:
             else: # иначе
                 hint += "*" # зашифровываем букву
     else:
-        update.message.reply_text(f"Введенной подсказки {hint_type} нет, введите корректную подсказку", reply_markup=kb_help)
+        update.message.reply_text(f"Введённой подсказки {hint_type} нет, введите корректную подсказку.", reply_markup=kb_help)
         return
     
     update.message.reply_text(hint, reply_markup=kb_help)
@@ -369,7 +372,7 @@ def leaderboard(update: Update, context: CallbackContext) -> None:
     string = ""
     for i in leaderboard.index:
         string += f"{medals[i] if i in medals.keys() else i}: {leaderboard['user_name'][i]}, набравший(ая) {leaderboard['score_best'][i]} баллов!\n"
-    string += f"\nВаше текущее место {leaderboard_user.index[0]} с суммой баллов {leaderboard_user['score_best'].iloc[0]}!{'🎉' if leaderboard_user.index[0] <=LEADERBOARD_SIZE else ''}"
+    string += f"\nВаше текущее место - {leaderboard_user.index[0]}, с суммой баллов {leaderboard_user['score_best'].iloc[0]}!{'🎉' if leaderboard_user.index[0] <=LEADERBOARD_SIZE else ''}"
     update.message.reply_text(string, reply_markup=kb_basic)
     
     
@@ -378,7 +381,7 @@ def leaderboard(update: Update, context: CallbackContext) -> None:
 
 
 def main():
-    updater = Updater(TOKEN) # API для взаимодействия с ботом
+    updater = Updater(TOKEN, request_kwargs={'read_timeout': 30, 'connect_timeout': 30}) # API для взаимодействия с ботом
 
     dispatcher = updater.dispatcher # получение диспетчера для регистрации обработчиков
 
