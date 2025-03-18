@@ -1,0 +1,4 @@
+pandas==2.2.3
+python-dotenv==1.0.1
+python-telegram-bot==13.13
+pyxdameraulevenshtein==1.8.0
