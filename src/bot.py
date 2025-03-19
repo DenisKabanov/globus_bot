@@ -7,8 +7,8 @@ import re # для регулярных выражений
 import random # для случайного выбора
 import pandas as pd # для работы с базой данных
 from dotenv import load_dotenv # для загрузки переменных окружения
-from telegram import Update, KeyboardButton, ReplyKeyboardMarkup, InputMediaPhoto
-from telegram.ext import Updater, CommandHandler, CallbackContext, MessageHandler, Filters
+from telegram import Update, KeyboardButton, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
+from telegram.ext import Updater, CommandHandler, CallbackContext, MessageHandler, Filters, CallbackQueryHandler
 from pyxdameraulevenshtein import damerau_levenshtein_distance # для подсчёта минимального числа изменений в первой строке, чтобы она стала идентичной второй
 # import logging # для логирования
 
@@ -31,9 +31,11 @@ else:
         "current_country": str(),
         "current_answer": str(),
         "countries_history": list(),
-        "score_total" : int(),
-        "score_best" : int(),
-        "score_countries" : dict()
+        "score_total": int(),
+        "score_best": int(),
+        "score_countries": dict(),
+        "hint_countries": dict(),
+        "potw": str()
     }
 
     db = pd.DataFrame(columns=variables, index=[])
@@ -41,6 +43,7 @@ else:
 
 
 data = {}
+countries_potw = {"all": set()} # "all" — под все страны сразу
 for country_name in os.listdir(DATA_PATH):
     data[country_name] = {}
     data[country_name]["flag"] = f"{DATA_PATH}/{country_name}/flag.png"
@@ -48,21 +51,46 @@ for country_name in os.listdir(DATA_PATH):
     data[country_name]["description"] = {}
     
     with open(f"{DATA_PATH}/{country_name}/description.txt", "r", encoding="utf-8") as f:
+        potw = f.readline()[13:-1]
+        f.readline()
+        for potw_ in potw.split("|"):
+            if potw_ not in countries_potw.keys():
+                countries_potw[potw_] = set([country_name])
+            else:
+                countries_potw[potw_].add(country_name)
+        countries_potw["all"].add(country_name)
+        
         for hint in ["Природа", "Достопримечательности", "Культура", "Язык", "Исторический факт", "Города"]:
             data[country_name]["description"][hint] = f.readline()[len(hint) + 2:]
             f.readline()
         
         data[country_name]["description"]["Общее описание"] = "".join(f.readlines(-1))
-countries_all = set(data.keys()) # set с названиями всех стран
 
 
 button1 = KeyboardButton("загадай")
 button2 = KeyboardButton("расскажи о стране")
 button3 = KeyboardButton("выведи таблицу лидеров")
+button4 = KeyboardButton("выбрать часть света")
 kb_basic = ReplyKeyboardMarkup(
     keyboard=[
-        [button1, button2]
-        , [button3]
+        [button1, button2],
+        [button3, button4]
+    ],
+    resize_keyboard=True  # Optional: Resizes the keyboard to fit the screen
+)
+
+
+button_potw1 = InlineKeyboardButton("Америка", callback_data="Америка")
+button_potw2 = InlineKeyboardButton("Европа", callback_data="Европа")
+button_potw3 = InlineKeyboardButton("Азия", callback_data="Азия")
+button_potw4 = InlineKeyboardButton("Африка", callback_data="Африка")
+button_potw5 = InlineKeyboardButton("Австралия и Океания", callback_data="Австралия и Океания")
+button_potw6 = InlineKeyboardButton("все страны сразу", callback_data="all")
+kb_potw = InlineKeyboardMarkup(
+    inline_keyboard=[
+        [button_potw1, button_potw2],
+        [button_potw3, button_potw4],
+        [button_potw5, button_potw6]
     ],
     resize_keyboard=True  # Optional: Resizes the keyboard to fit the screen
 )
@@ -90,10 +118,12 @@ kb_help = ReplyKeyboardMarkup(
 )
 
 
-button_reset = KeyboardButton(text="очистить историю")
+button_reset = KeyboardButton("очистить историю")
+button_change_potw = KeyboardButton("выбрать часть света")
 kb_reset = ReplyKeyboardMarkup(
     keyboard=[
-        [button_reset]
+        [button_reset],
+        [button_change_potw]
     ],
     resize_keyboard=True  # Optional: Resizes the keyboard to fit the screen
 )
@@ -114,8 +144,8 @@ def start(update: Update, context: CallbackContext) -> None:
         user_name += f" {update.message.chat.last_name}"
 
     if (chat_id not in db["chat_id"].values):
-        new_user = pd.DataFrame({"user_name": [user_name], "chat_id": [chat_id], "current_country": [""], "current_answer": [""],
-                                 "countries_history": [[]], "score_total": [0], "score_best": [0], "score_countries": [{}]})
+        new_user = pd.DataFrame({"user_name": [user_name], "chat_id": [chat_id], "current_country": [""], "current_answer": [""], "countries_history": [[]], 
+                                 "score_total": [0], "score_best": [0], "score_countries": [{}], "hint_countries": [{}], "potw": ["all"]})
         db = pd.concat([db, new_user], ignore_index=True)
         save_db(db)
 
@@ -129,10 +159,11 @@ def help(update: Update, context: CallbackContext):
 3) '<b>сдаюсь</b>' — чтобы признать поражение и узнать, какой стране принадлежит флаг\n\
 4) '<b>расскажи о стране *</b>', где * это название страны — чтобы бот мог поведать информацию о ней, без загадывания (для произвольной страны вместо * нужно написать 'любой')\n\
 5) '<b>выведи таблицу лидеров</b>' — чтобы посмотреть рейтинг лучших игроков\n\
-6) ну и конечно же само <b>название страны</b>, если она была загадана", parse_mode='HTML') # отправляем сообщение (text) в чат (chat_id) 
+6) '<b>выбрать часть света</b>' — для загадывания стран только из определённой части света, если ничего не выбрано, то загадываются все страны\n\
+7) ну и конечно же само <b>название страны</b>, если она была загадана", parse_mode="HTML") # отправляем сообщение (text) в чат (chat_id) 
 
 
-def clear_history(update: Update, context: CallbackContext):
+def clear_history(update: Update, context: CallbackContext) -> None:
     global db
     chat_id = update.message.chat.id
 
@@ -141,33 +172,72 @@ def clear_history(update: Update, context: CallbackContext):
     db.loc[db["chat_id"] == chat_id, "countries_history"].iloc[0].clear()
     db.loc[db["chat_id"] == chat_id, "score_total"] = 0
     db.loc[db["chat_id"] == chat_id, "score_countries"].iloc[0].clear()
+    db.loc[db["chat_id"] == chat_id, "hint_countries"].iloc[0].clear()
+    db.loc[db["chat_id"] == chat_id, "potw"] = "all"
     
     save_db(db)
 
     update.message.reply_text(f"История взаимодействия с приложением очищена!", reply_markup=kb_basic)
 
 
+def choose_potw(update: Update, context: CallbackContext) -> None:
+    chat_id = update.message.chat.id
+    countries_history = set(db.loc[db["chat_id"] == chat_id, "countries_history"].iloc[0])
+
+    context.bot.send_photo(chat_id=chat_id, photo=open(f"{EXTRA_PATH}/zones.png", "rb"), caption=f"Выберите часть света из представленных:\n\
+- <b>Америка</b> — {len(countries_potw['Америка'] - countries_history)} неотгаданных стран\n\
+- <b>Европа</b> — {len(countries_potw['Европа'] - countries_history)} неотгаданных стран\n\
+- <b>Азия</b> — {len(countries_potw['Азия'] - countries_history)} неотгаданных стран\n\
+- <b>Африка</b> — {len(countries_potw['Африка'] - countries_history)} неотгаданных стран\n\
+- <b>Австралия и Океания</b> — {len(countries_potw['Австралия и Океания'] - countries_history)} неотгаданных стран\n\
+- <b>все страны сразу</b> — {len(countries_potw['all'] - countries_history)}", parse_mode="HTML", reply_markup=kb_potw)
+
+
+def choose_potw_(update: Update, context: CallbackContext) -> None:
+    global db
+    chat_id = update.callback_query.message.chat.id
+
+    query = update.callback_query
+    query.answer()
+    choice = query.data
+    db.loc[db["chat_id"] == chat_id, "potw"] = choice
+    save_db(db)
+
+    if choice != "all":
+        update.callback_query.message.reply_text(f"Вами выбрана {choice}, последующие страны будут загадываться из неё!", reply_markup=kb_basic)
+    else:
+        update.callback_query.message.reply_text(f"Вами выбраны все страны сразу, удачи!", reply_markup=kb_basic)
+
+
 def send_flag(update: Update, context: CallbackContext) -> None:
     global db
     chat_id = update.message.chat.id
     total_score = db.loc[db["chat_id"] == chat_id, "score_total"].iloc[0]
+    potw = db.loc[db["chat_id"] == chat_id, "potw"].iloc[0]
 
     countries_history = set(db.loc[db["chat_id"] == chat_id, "countries_history"].iloc[0])
-    if len(countries_history) == len(countries_all):
+    if len(countries_history) == len(countries_potw["all"]):
         gif_animation = open(f"{EXTRA_PATH}/win.gif", "rb")
         context.bot.send_animation(chat_id=chat_id, animation=gif_animation, caption=f"🎉Поздравляем, Вы отгадали все страны! Общее количество заработанных баллов: {total_score}. Хотите начать новую викторину?🎉", reply_markup=kb_reset)
         return
+    elif len(countries_potw[potw] - countries_history) == 0:
+        gif_animation = open(f"{EXTRA_PATH}/win_potw.gif", "rb")
+        context.bot.send_animation(chat_id=chat_id, animation=gif_animation, caption=f"🎉Поздравляем, Вы отгадали все страны! Общее количество заработанных баллов: {total_score}. Хотите начать новую викторину?🎉", reply_markup=kb_reset)
+        return
 
-    country_name = random.choices(list(countries_all - countries_history), k=1)[0]
+    country_name = random.choices(list(countries_potw[potw] - countries_history), k=1)[0]
     
     flag_path = data[country_name]["flag"]
 
     # update.message.reply_text(f"{country_name}") # DEBUG
 
     db.loc[db["chat_id"] == chat_id, "current_country"] = country_name
-    if country_name not in db.loc[db["chat_id"] == chat_id, "score_countries"].iloc[0]:
+    if country_name not in db.loc[db["chat_id"] == chat_id, "score_countries"].iloc[0]: # добавляем столбец с текущим счётом для загаданной страны
         db.loc[db["chat_id"] == chat_id, "score_countries"].iloc[0][country_name] = 100
     current_country_score = db.loc[db["chat_id"] == chat_id, "score_countries"].iloc[0][country_name]
+
+    if country_name not in db.loc[db["chat_id"] == chat_id, "hint_countries"].iloc[0]: # добавляем столбец с использованными подсказками
+        db.loc[db["chat_id"] == chat_id, "hint_countries"].iloc[0][country_name] = []
 
     current_answer = ["*" for i in range(len(country_name))]
     for idx, char in enumerate(country_name):
@@ -178,7 +248,6 @@ def send_flag(update: Update, context: CallbackContext) -> None:
     context.bot.send_photo(chat_id=chat_id, photo=open(flag_path, "rb"), caption=f"В названии загаданной страны присутствует {len(country_name)} символов! За её отгадывание вы можете получить баллов: {current_country_score}.", reply_markup=kb_help)
 
     save_db(db)
-
 
 def answer_flag(update: Update, context: CallbackContext) -> None:
     global db
@@ -221,6 +290,7 @@ def answer_flag(update: Update, context: CallbackContext) -> None:
         db.loc[db["chat_id"] == chat_id, "current_answer"] = ""
         db.loc[db["chat_id"] == chat_id, "countries_history"].iloc[0].append(answer_expected)
         db.loc[db["chat_id"] == chat_id, "score_countries"].iloc[0].pop(answer_expected, None)
+        db.loc[db["chat_id"] == chat_id, "hint_countries"].iloc[0].pop(answer_expected, None)
     else:
         db.loc[db["chat_id"] == chat_id, "score_countries"].iloc[0][answer_expected] -= 1
         
@@ -257,6 +327,7 @@ def surrender(update: Update, context: CallbackContext) -> None:
         db.loc[db["chat_id"] == chat_id, "current_answer"] = ""
         db.loc[db["chat_id"] == chat_id, "countries_history"].iloc[0].append(answer_expected)
         db.loc[db["chat_id"] == chat_id, "score_countries"].iloc[0].pop(answer_expected, None)
+        db.loc[db["chat_id"] == chat_id, "hint_countries"].iloc[0].pop(answer_expected, None)
         
         save_db(db)
 
@@ -276,25 +347,32 @@ def hint(update: Update, context: CallbackContext) -> None:
         update.message.reply_text(f"Введите корректную подсказку:", reply_markup=kb_help)
         return
     hint_type = hint_type[0]
+    used_hints = db.loc[db["chat_id"] == chat_id, "hint_countries"].iloc[0][country_name] # вернёт list
+
+    # проверяем, использовали ли мы аналогичную подсказку раньше
+    modifier = 1
+    for hint in used_hints:
+        if damerau_levenshtein_distance(hint_type, hint) <= 2:
+            modifier = 0
     
     if damerau_levenshtein_distance(hint_type, "природу") <= 2:
         hint = data[country_name]["description"]["Природа"]
-        db.loc[db["chat_id"] == chat_id, "score_countries"].iloc[0][country_name] -= 10
+        db.loc[db["chat_id"] == chat_id, "score_countries"].iloc[0][country_name] -= 10 * modifier
     elif damerau_levenshtein_distance(hint_type, "достопримечательность") <= 2:
         hint = data[country_name]["description"]["Достопримечательности"]
-        db.loc[db["chat_id"] == chat_id, "score_countries"].iloc[0][country_name] -= 15
+        db.loc[db["chat_id"] == chat_id, "score_countries"].iloc[0][country_name] -= 15 * modifier
     elif damerau_levenshtein_distance(hint_type, "культуру") <= 2:
         hint = data[country_name]["description"]["Культура"]
-        db.loc[db["chat_id"] == chat_id, "score_countries"].iloc[0][country_name] -= 5
+        db.loc[db["chat_id"] == chat_id, "score_countries"].iloc[0][country_name] -= 5 * modifier
     elif damerau_levenshtein_distance(hint_type, "язык") <= 2:
         hint = data[country_name]["description"]["Язык"]
-        db.loc[db["chat_id"] == chat_id, "score_countries"].iloc[0][country_name] -= 5
+        db.loc[db["chat_id"] == chat_id, "score_countries"].iloc[0][country_name] -= 5 * modifier
     elif damerau_levenshtein_distance(hint_type, "исторический факт") <= 2:
         hint = data[country_name]["description"]["Исторический факт"]
-        db.loc[db["chat_id"] == chat_id, "score_countries"].iloc[0][country_name] -= 10
+        db.loc[db["chat_id"] == chat_id, "score_countries"].iloc[0][country_name] -= 10 * modifier
     elif damerau_levenshtein_distance(hint_type, "города") <= 2:
         hint = data[country_name]["description"]["Города"]
-        db.loc[db["chat_id"] == chat_id, "score_countries"].iloc[0][country_name] -= 20
+        db.loc[db["chat_id"] == chat_id, "score_countries"].iloc[0][country_name] -= 20 * modifier
     elif damerau_levenshtein_distance(hint_type, "часть названия") <= 2:
         db.loc[db["chat_id"] == chat_id, "score_countries"].iloc[0][country_name] -= 40
         start_idx, end_idx = sorted(random.sample(range(name_len), k=2)) # с какой по какую буквы подсказываем
@@ -316,9 +394,12 @@ def hint(update: Update, context: CallbackContext) -> None:
     else:
         update.message.reply_text(f"Введённой подсказки {hint_type} нет, введите корректную подсказку.", reply_markup=kb_help)
         return
-    
-    update.message.reply_text(hint, reply_markup=kb_help)
+
+    if hint_type not in used_hints: # сохраняем запись о том, что дали hint_type подсказку для страны country_name, если раньше её не запрашивали
+        used_hints.append(hint_type)
     save_db(db)
+
+    update.message.reply_text(hint, reply_markup=kb_help)
 
 
 def tell_about(update: Update, context: CallbackContext) -> None:
@@ -329,14 +410,14 @@ def tell_about(update: Update, context: CallbackContext) -> None:
     countries_history = set(db.loc[db["chat_id"] == chat_id, "countries_history"].iloc[0])
 
     if (len(country_name) <= 2) or (damerau_levenshtein_distance(country_name, "любой") <= 2):
-        country_name = random.choices(list(countries_all - countries_history), k=1)[0]
+        country_name = random.choices(list(countries_potw["all"] - countries_history), k=1)[0] # выбираем любую страну ("all" — без привязки к части света)
         flag_path = data[country_name]["flag"]
         map_path = data[country_name]["map"]
         description = data[country_name]["description"]["Общее описание"]
     else:
         dist_best = 3
         country_name_closest = ""
-        for country in countries_all:
+        for country in countries_potw["all"]: # идём по всем странам
             dist = damerau_levenshtein_distance(country_name, country)
             if dist < dist_best:
                 country_name_closest = country
@@ -357,6 +438,7 @@ def tell_about(update: Update, context: CallbackContext) -> None:
 
     update.message.reply_media_group(media)
     update.message.reply_text(f"Выберите следующую команду:", reply_markup=kb_basic)
+
 
 def leaderboard(update: Update, context: CallbackContext) -> None:
     chat_id = update.message.chat.id
@@ -389,13 +471,15 @@ def main():
     dispatcher.add_handler(CommandHandler("start", start))
     dispatcher.add_handler(CommandHandler("help", help))
     dispatcher.add_handler(CommandHandler("clear_history", clear_history))
-    dispatcher.add_handler(MessageHandler(Filters.regex(r"[В|в]ыведи таблицу лидеров"), leaderboard))
     dispatcher.add_handler(MessageHandler(Filters.regex(r"[О|о]чистить историю"), clear_history))
     # dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, repeat))
     dispatcher.add_handler(MessageHandler(Filters.regex(r"[З|з]агадай"), send_flag))
     dispatcher.add_handler(MessageHandler(Filters.regex(r"[П|п]одскажи .*"), hint))
     dispatcher.add_handler(MessageHandler(Filters.regex(r"[С|с]даюсь"), surrender))
     dispatcher.add_handler(MessageHandler(Filters.regex(r"[Р|р]асскажи о"), tell_about))
+    dispatcher.add_handler(MessageHandler(Filters.regex(r"[В|в]ыведи таблицу лидеров"), leaderboard))
+    dispatcher.add_handler(MessageHandler(Filters.regex(r"[В|в]ыбрать часть света"), choose_potw))
+    dispatcher.add_handler(CallbackQueryHandler(choose_potw_))
     dispatcher.add_handler(MessageHandler(Filters.text, answer_flag)) 
     
     # dispatcher.add_error_handler(error)
