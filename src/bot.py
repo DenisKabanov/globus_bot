@@ -149,7 +149,8 @@ def start(update: Update, context: CallbackContext) -> None:
         db = pd.concat([db, new_user], ignore_index=True)
         save_db(db)
 
-    update.message.reply_text(f"Привет, {user_name}! Начнём викторину? \nВыберите команду:", reply_markup=kb_basic)
+    update.message.reply_text(f"Привет, {user_name}! Начнём викторину? \n\
+Выберите команду (<i>перед первым загадыванием рекомендуем выбрать часть света, так как иначе подбор будет производиться из общего пула, в котором много малоизвестных стран</i>):", parse_mode="HTML", reply_markup=kb_basic)
 
 
 def help(update: Update, context: CallbackContext):
@@ -190,7 +191,7 @@ def choose_potw(update: Update, context: CallbackContext) -> None:
 - <b>Азия</b> — {len(countries_potw['Азия'] - countries_history)} неотгаданных стран\n\
 - <b>Африка</b> — {len(countries_potw['Африка'] - countries_history)} неотгаданных стран\n\
 - <b>Австралия и Океания</b> — {len(countries_potw['Австралия и Океания'] - countries_history)} неотгаданных стран\n\
-- <b>все страны сразу</b> — {len(countries_potw['all'] - countries_history)}", parse_mode="HTML", reply_markup=kb_potw)
+- <b>все страны сразу</b> — {len(countries_potw['all'] - countries_history)} неотгаданных стран", parse_mode="HTML", reply_markup=kb_potw)
 
 
 def choose_potw_(update: Update, context: CallbackContext) -> None:
@@ -263,8 +264,45 @@ def answer_flag(update: Update, context: CallbackContext) -> None:
     total_score = db.loc[db["chat_id"] == chat_id, "score_total"].iloc[0]
     best_score = db.loc[db["chat_id"] == chat_id, "score_best"].iloc[0]
     current_country_score = score_countries[answer_expected]
-            
-    if (answer_given.lower() == answer_expected.lower()) or \
+
+    # проверка совпадения ответов с учётом количества слов в названии
+    answer_expected_ = answer_expected.split()
+    answer_given_ = answer_given.split()
+    answer_expected_len, answer_given_len = len(answer_expected_), len(answer_given_)
+    answer_hint = db.loc[db["chat_id"] == chat_id, "current_answer"].iloc[0]
+    answer_hint = [list(split) for split in answer_hint.split()]
+    current_answer = [["*" if char_i not in ["—", "-", "'"] else char_i for char_i in answer_expected_[split_i]] for split_i in range(answer_expected_len)]
+
+    correct_answer = True # флаг, что ответы одинаковые
+    correct_letters = -1 # число совпавших букв (-1 из-за сплитов и если мы отправили хоть что-то кроме пробелов, то он превратится в 0)
+
+    if answer_expected_len != answer_given_len: # проверка, что одинаковое количество сплитов
+        correct_answer = False
+
+    for split_i in range(min(answer_expected_len, answer_given_len)):
+        correct_letters += 1
+        split_expected = answer_expected_[split_i]
+        split_given = answer_given_[split_i]
+
+        if len(split_expected) != len(split_given): # проверка, что сплиты имеют одинаковую длину
+            correct_answer = False
+
+        for char_i in range(min(len(split_expected), len(split_given))):
+            char_expected = split_expected[char_i]
+            char_given = split_given[char_i]
+
+            if char_expected.lower() != char_given.lower():
+                correct_answer = False
+            else:
+                correct_letters += 1
+                answer_hint[split_i][char_i] = char_expected
+                current_answer[split_i][char_i] = char_expected
+
+    answer_hint = " ".join(["".join(split) for split in answer_hint])
+    current_answer = " ".join(["".join(split) for split in current_answer])
+
+    # действие в зависимости от того, совпал ответ с ожидаемым названием или нет
+    if (correct_answer) or \
        ((answer_expected == "Китайская Народная Республика") and (answer_given.lower() == "китай")) or \
        ((answer_expected == "Корейская Народно-Демократическая Республика") and (answer_given.lower() == "кндр")) or \
        ((answer_expected == "Объединенные Арабские Эмираты") and (answer_given.lower() == "оаэ")) or \
@@ -292,20 +330,12 @@ def answer_flag(update: Update, context: CallbackContext) -> None:
         db.loc[db["chat_id"] == chat_id, "score_countries"].iloc[0].pop(answer_expected, None)
         db.loc[db["chat_id"] == chat_id, "hint_countries"].iloc[0].pop(answer_expected, None)
     else:
-        db.loc[db["chat_id"] == chat_id, "score_countries"].iloc[0][answer_expected] -= 1
-        
-        correct_letters = 0 # число совпавших букв
-        current_answer = list(db.loc[db["chat_id"] == chat_id, "current_answer"].iloc[0])
+        db.loc[db["chat_id"] == chat_id, "score_countries"].iloc[0][answer_expected] -= 1       
+        db.loc[db["chat_id"] == chat_id, "current_answer"] = answer_hint
 
-        for i in range(min(len(answer_given), len(answer_expected))): # идём по минимальной длине
-            if answer_given[i].lower() == answer_expected[i].lower(): # сравниваем буквы на позициях
-                correct_letters += 1 # увеличиваем число совпадений
-                current_answer[i] = answer_given[i]
-        current_answer = "".join(current_answer)
-        
-        db.loc[db["chat_id"] == chat_id, "current_answer"] = current_answer
-
-        update.message.reply_text(f"Совпадений {correct_letters}: {current_answer}. \nПопытайся ещё раз!", reply_markup=kb_help)
+        update.message.reply_text(f"Совпадений {correct_letters}: {current_answer}.\n\
+Совпавшие буквы за все попытки: {answer_hint}.\n\
+Попытайся ещё раз!", reply_markup=kb_help)
     save_db(db)
 
 
@@ -472,7 +502,6 @@ def main():
     dispatcher.add_handler(CommandHandler("help", help))
     dispatcher.add_handler(CommandHandler("clear_history", clear_history))
     dispatcher.add_handler(MessageHandler(Filters.regex(r"[О|о]чистить историю"), clear_history))
-    # dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, repeat))
     dispatcher.add_handler(MessageHandler(Filters.regex(r"[З|з]агадай"), send_flag))
     dispatcher.add_handler(MessageHandler(Filters.regex(r"[П|п]одскажи .*"), hint))
     dispatcher.add_handler(MessageHandler(Filters.regex(r"[С|с]даюсь"), surrender))
@@ -481,13 +510,11 @@ def main():
     dispatcher.add_handler(MessageHandler(Filters.regex(r"[В|в]ыбрать часть света"), choose_potw))
     dispatcher.add_handler(CallbackQueryHandler(choose_potw_))
     dispatcher.add_handler(MessageHandler(Filters.text, answer_flag)) 
-    
     # dispatcher.add_error_handler(error)
 
     updater.start_polling() # Запуск бота
 
-    # Ожидание завершения работы
-    updater.idle()
+    updater.idle() # Ожидание завершения работы
 
 if __name__ == '__main__':
     main()
